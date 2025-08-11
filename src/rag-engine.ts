@@ -1,18 +1,6 @@
 import { App, TFile, Notice, normalizePath } from 'obsidian';
 import { RAGSettings } from './settings';
-
-export interface DocumentChunk {
-	content: string;
-	metadata: {
-		file: string;
-		path: string;
-		tags?: string[];
-		frontmatter?: any;
-		chunkIndex: number;
-		totalChunks: number;
-	};
-	embedding?: number[];
-}
+import { IndexManager, DocumentChunk } from './index-manager';
 
 export interface SearchResult {
 	chunk: DocumentChunk;
@@ -22,24 +10,35 @@ export interface SearchResult {
 export class RAGEngine {
 	private app: App;
 	private settings: RAGSettings;
-	private documents: DocumentChunk[] = [];
-	private isIndexed = false;
+	private indexManager: IndexManager;
+	private isInitialized = false;
 
 	constructor(app: App, settings: RAGSettings) {
 		this.app = app;
 		this.settings = settings;
+		this.indexManager = new IndexManager(app, settings);
 	}
 
 	async initialize() {
+		await this.indexManager.loadIndex();
+		this.isInitialized = true;
+
 		if (this.settings.autoIndex) {
 			await this.indexVault();
 		}
 	}
 
 	async updateSettings(settings: RAGSettings) {
+		const oldEmbeddingModel = this.settings.embeddingModel;
 		this.settings = settings;
-		// Re-index if API key changed
-		if (settings.openaiApiKey && !this.isIndexed) {
+
+		// Update index manager settings
+		this.indexManager = new IndexManager(this.app, settings);
+		await this.indexManager.loadIndex();
+
+		// Re-index if embedding model changed or if not indexed yet
+		if (settings.openaiApiKey &&
+			(oldEmbeddingModel !== settings.embeddingModel || !this.isInitialized)) {
 			await this.indexVault();
 		}
 	}
@@ -51,31 +50,37 @@ export class RAGEngine {
 		}
 
 		try {
-			new Notice('Starting vault indexing...');
-			
-			// Get all markdown files
-			const files = this.app.vault.getMarkdownFiles();
-			this.documents = [];
+			new Notice('Checking for updates...');
+
+			// Get files that need updating
+			const outdatedFiles = await this.indexManager.getOutdatedFiles();
+
+			if (outdatedFiles.length === 0) {
+				new Notice('Vault index is up to date!');
+				return;
+			}
+
+			new Notice(`Updating ${outdatedFiles.length} files...`);
 
 			let processedFiles = 0;
-			const totalFiles = files.length;
+			const totalFiles = outdatedFiles.length;
 
-			for (const file of files) {
+			for (const file of outdatedFiles) {
 				try {
 					await this.indexFile(file);
 					processedFiles++;
-					
-					// Update progress every 10 files
-					if (processedFiles % 10 === 0) {
-						new Notice(`Indexed ${processedFiles}/${totalFiles} files...`);
+
+					// Update progress every 5 files
+					if (processedFiles % 5 === 0) {
+						new Notice(`Updated ${processedFiles}/${totalFiles} files...`);
 					}
 				} catch (error) {
 					console.error(`Error indexing file ${file.path}:`, error);
 				}
 			}
 
-			this.isIndexed = true;
-			new Notice(`Vault indexing completed! Indexed ${this.documents.length} chunks from ${totalFiles} files.`);
+			const stats = this.indexManager.getIndexStats();
+			new Notice(`Indexing completed! ${stats.totalChunks} chunks, ${stats.totalEmbeddings} embeddings.`);
 		} catch (error) {
 			console.error('Error during vault indexing:', error);
 			new Notice('Error during vault indexing. Check console for details.');
@@ -84,17 +89,34 @@ export class RAGEngine {
 
 	private async indexFile(file: TFile): Promise<void> {
 		const content = await this.app.vault.read(file);
-		const chunks = this.chunkDocument(content, file);
+		const chunkData = this.chunkDocument(content, file);
 
+		// Convert to full DocumentChunk objects (fileVersion will be added by IndexManager)
+		const chunks: DocumentChunk[] = chunkData.map(chunk => ({
+			...chunk,
+			fileVersion: {
+				path: file.path,
+				mtime: 0, // Will be set by IndexManager
+				size: 0,
+				hash: ''
+			}
+		}));
+
+		// Add chunks to index (without embeddings first)
+		await this.indexManager.addFileToIndex(file, chunks);
+
+		// Generate embeddings for each chunk
 		for (const chunk of chunks) {
-			// Generate embedding for the chunk
-			const embedding = await this.generateEmbedding(chunk.content);
-			chunk.embedding = embedding;
-			this.documents.push(chunk);
+			try {
+				const embedding = await this.generateEmbedding(chunk.content);
+				await this.indexManager.updateChunkEmbedding(chunk.id, embedding);
+			} catch (error) {
+				console.error(`Error generating embedding for chunk ${chunk.id}:`, error);
+			}
 		}
 	}
 
-	private chunkDocument(content: string, file: TFile): DocumentChunk[] {
+	private chunkDocument(content: string, file: TFile): Omit<DocumentChunk, 'fileVersion'>[] {
 		// Parse frontmatter
 		const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
 		const frontmatterMatch = content.match(frontmatterRegex);
@@ -126,7 +148,7 @@ export class RAGEngine {
 
 		// Simple chunking by paragraphs (can be improved)
 		const paragraphs = bodyContent.split('\n\n').filter(p => p.trim().length > 0);
-		const chunks: DocumentChunk[] = [];
+		const chunks: Omit<DocumentChunk, 'fileVersion'>[] = [];
 		const chunkSize = 1000; // characters
 		
 		let currentChunk = '';
@@ -136,6 +158,7 @@ export class RAGEngine {
 			if (currentChunk.length + paragraph.length > chunkSize && currentChunk.length > 0) {
 				// Create chunk
 				chunks.push({
+					id: `${file.path}:${chunkIndex}`,
 					content: currentChunk.trim(),
 					metadata: {
 						file: file.name,
@@ -144,7 +167,9 @@ export class RAGEngine {
 						frontmatter: frontmatter,
 						chunkIndex: chunkIndex,
 						totalChunks: 0 // Will be updated later
-					}
+					},
+					createdAt: Date.now(),
+					updatedAt: Date.now()
 				});
 				currentChunk = paragraph;
 				chunkIndex++;
@@ -156,6 +181,7 @@ export class RAGEngine {
 		// Add final chunk
 		if (currentChunk.trim()) {
 			chunks.push({
+				id: `${file.path}:${chunkIndex}`,
 				content: currentChunk.trim(),
 				metadata: {
 					file: file.name,
@@ -164,13 +190,24 @@ export class RAGEngine {
 					frontmatter: frontmatter,
 					chunkIndex: chunkIndex,
 					totalChunks: 0
-				}
+				},
+				createdAt: Date.now(),
+				updatedAt: Date.now()
 			});
 		}
 
-		// Update total chunks count
-		chunks.forEach(chunk => {
+		// Update total chunks count and add missing properties
+		chunks.forEach((chunk, index) => {
 			chunk.metadata.totalChunks = chunks.length;
+			if (!chunk.id) {
+				chunk.id = `${file.path}:${index}`;
+			}
+			if (!chunk.createdAt) {
+				chunk.createdAt = Date.now();
+			}
+			if (!chunk.updatedAt) {
+				chunk.updatedAt = Date.now();
+			}
 		});
 
 		return chunks;
@@ -205,8 +242,10 @@ export class RAGEngine {
 	}
 
 	async search(query: string, contextFile?: TFile): Promise<SearchResult[]> {
-		if (!this.isIndexed) {
-			throw new Error('Vault not indexed. Please run indexing first.');
+		const chunks = this.indexManager.getChunksWithEmbeddings();
+
+		if (chunks.length === 0) {
+			throw new Error('No embeddings found. Please run indexing first.');
 		}
 
 		// Generate embedding for query
@@ -214,21 +253,21 @@ export class RAGEngine {
 
 		// Calculate similarities
 		const results: SearchResult[] = [];
-		
-		for (const doc of this.documents) {
-			if (!doc.embedding) continue;
+
+		for (const chunk of chunks) {
+			if (!chunk.embedding) continue;
 
 			// If context file is specified, prioritize chunks from that file
-			const isContextFile = contextFile && doc.metadata.path === contextFile.path;
-			
-			const similarity = this.cosineSimilarity(queryEmbedding, doc.embedding);
-			
+			const isContextFile = contextFile && chunk.metadata.path === contextFile.path;
+
+			const similarity = this.cosineSimilarity(queryEmbedding, chunk.embedding);
+
 			// Apply context file boost
 			const adjustedSimilarity = isContextFile ? similarity * 1.2 : similarity;
-			
+
 			if (adjustedSimilarity >= this.settings.similarityThreshold) {
 				results.push({
-					chunk: doc,
+					chunk: chunk,
 					similarity: adjustedSimilarity
 				});
 			}
@@ -305,7 +344,16 @@ ${context}`;
 
 	cleanup() {
 		// Clean up resources if needed
-		this.documents = [];
-		this.isIndexed = false;
+		this.isInitialized = false;
+	}
+
+	// Utility methods for debugging and monitoring
+	getIndexStats() {
+		return this.indexManager.getIndexStats();
+	}
+
+	async forceRebuildIndex(): Promise<void> {
+		await this.indexManager.rebuildIndex();
+		await this.indexVault();
 	}
 }
