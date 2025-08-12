@@ -27,7 +27,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to open RAG view
 		this.addCommand({
 			id: 'open-rag-view',
-			name: 'ObsidiAnswer: Open Assistant',
+			name: 'Open Assistant',
 			callback: () => {
 				this.activateView();
 			}
@@ -36,7 +36,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to ask question about current note
 		this.addCommand({
 			id: 'ask-about-current-note',
-			name: 'ObsidiAnswer: Ask About Current Note',
+			name: 'Ask About Current Note',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				this.askAboutCurrentNote(view.file);
 			}
@@ -45,7 +45,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to index vault
 		this.addCommand({
 			id: 'index-vault',
-			name: 'ObsidiAnswer: Index Vault',
+			name: 'Index Vault',
 			callback: async () => {
 				new Notice('Starting vault indexing...');
 				await this.ragEngine.indexVault();
@@ -56,7 +56,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to force rebuild index
 		this.addCommand({
 			id: 'force-rebuild-index',
-			name: 'ObsidiAnswer: Force Vault Re-Index',
+			name: 'Force Vault Re-Index',
 			callback: async () => {
 				new Notice('Starting complete vault re-indexing...');
 				await this.ragEngine.forceRebuildIndex();
@@ -67,7 +67,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to show index stats
 		this.addCommand({
 			id: 'show-index-stats',
-			name: 'ObsidiAnswer: Show Index Statistics',
+			name: 'Show Index Statistics',
 			callback: () => {
 				const stats = this.ragEngine.getIndexStats();
 				new Notice(`Index Stats: ${stats.totalFiles} files, ${stats.totalChunks} chunks, ${stats.totalEmbeddings} embeddings`);
@@ -78,7 +78,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to reset similarity threshold
 		this.addCommand({
 			id: 'reset-similarity-threshold',
-			name: 'ObsidiAnswer: Reset Similarity Threshold to 0.3',
+			name: 'Reset Similarity Threshold to 0.3',
 			callback: async () => {
 				this.settings.similarityThreshold = 0.3;
 				await this.saveSettings();
