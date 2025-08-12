@@ -19,6 +19,8 @@ export interface RAGSettings {
 
 	// General settings
 	autoIndex: boolean;
+	autoIndexOnChange: boolean;
+	debounceDelay: number;
 	includeFilePaths: boolean;
 	indexPath: string;
 }
@@ -42,6 +44,8 @@ export const DEFAULT_SETTINGS: RAGSettings = {
 
 	// General settings
 	autoIndex: true,
+	autoIndexOnChange: true,
+	debounceDelay: 2000,
 	includeFilePaths: true,
 	indexPath: '.obsidian/plugins/obsidianswer/index'
 };

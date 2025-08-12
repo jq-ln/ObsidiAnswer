@@ -28,6 +28,9 @@ export class RAGEngine {
 	private llmProvider: BaseLLMProvider;
 	public isInitialized = false;
 	private progressCallback?: (progress: IndexingProgress) => void;
+	private debounceTimer?: NodeJS.Timeout;
+	private pendingFiles = new Set<string>();
+	private isIndexing = false;
 
 	constructor(app: App, settings: RAGSettings) {
 		this.app = app;
@@ -55,10 +58,13 @@ export class RAGEngine {
 		this.isInitialized = true;
 		console.log('[ObsidiAnswer] Index loaded, initialization complete');
 
+		// Set up file watching for automatic indexing
+		this.setupFileWatching();
+
 		// Run auto-indexing in background if enabled, but only after layout is ready
 		if (this.settings.autoIndex) {
 			const startIndexing = () => {
-				debug('[ObsidiAnswer] Starting background auto-indexing (layout ready)...');
+				console.log('[ObsidiAnswer] Starting background auto-indexing (layout ready)...');
 				this.indexVault().then(() => {
 					new Notice('ObsidiAnswer: Vault indexing completed');
 				}).catch(error => {
@@ -170,12 +176,12 @@ export class RAGEngine {
 	}
 
 	private async indexFile(file: TFile): Promise<void> {
-		debug(`[ObsidiAnswer] Indexing file: ${file.path}`);
+		console.log(`[ObsidiAnswer] Indexing file: ${file.path}`);
 
 		const content = await this.app.vault.read(file);
 		const chunkData = this.chunkDocument(content, file);
 
-		debug(`[ObsidiAnswer] Created ${chunkData.length} chunks for ${file.path}`);
+		console.log(`[ObsidiAnswer] Created ${chunkData.length} chunks for ${file.path}`);
 
 		// Convert to full DocumentChunk objects (fileVersion will be added by IndexManager)
 		const chunks: DocumentChunk[] = chunkData.map(chunk => ({
@@ -189,23 +195,23 @@ export class RAGEngine {
 		}));
 
 		// Add chunks to index (without embeddings first)
-		debug(`[ObsidiAnswer] Adding ${chunks.length} chunks to index for ${file.path}`);
+		console.log(`[ObsidiAnswer] Adding ${chunks.length} chunks to index for ${file.path}`);
 		await this.indexManager.addFileToIndex(file, chunks);
 
 		// Generate embeddings for each chunk
-		debug(`[ObsidiAnswer] Generating embeddings for ${chunks.length} chunks`);
+		console.log(`[ObsidiAnswer] Generating embeddings for ${chunks.length} chunks`);
 		for (const chunk of chunks) {
 			try {
 				const embedding = await this.generateEmbedding(chunk.content);
 				await this.indexManager.updateChunkEmbedding(chunk.id, embedding);
-				debug(`[ObsidiAnswer] Generated embedding for chunk ${chunk.id}`);
+				console.log(`[ObsidiAnswer] Generated embedding for chunk ${chunk.id}`);
 			} catch (error) {
 				console.error(`[ObsidiAnswer] Error generating embedding for chunk ${chunk.id}:`, error);
 				throw error; // Re-throw to see if this is causing silent failures
 			}
 		}
 
-		debug(`[ObsidiAnswer] Completed indexing file: ${file.path}`);
+		console.log(`[ObsidiAnswer] Completed indexing file: ${file.path}`);
 	}
 
 	private chunkDocument(content: string, file: TFile): Omit<DocumentChunk, 'fileVersion'>[] {
@@ -414,8 +420,121 @@ ${context}`;
 		return response.content;
 	}
 
+	private setupFileWatching() {
+		if (!this.settings.autoIndexOnChange) {
+			console.log('[ObsidiAnswer] Auto-indexing on file changes is disabled');
+			return;
+		}
+
+		console.log('[ObsidiAnswer] Setting up file watching...');
+
+		// Listen for file modifications
+		this.app.vault.on('modify', (file) => {
+			if (file instanceof TFile && file.extension === 'md') {
+				console.log(`[ObsidiAnswer] File modified: ${file.path}`);
+				this.scheduleFileIndex(file.path);
+			}
+		});
+
+		// Listen for file creation
+		this.app.vault.on('create', (file) => {
+			if (file instanceof TFile && file.extension === 'md') {
+				console.log(`[ObsidiAnswer] File created: ${file.path}`);
+				this.scheduleFileIndex(file.path);
+			}
+		});
+
+		// Listen for file deletion
+		this.app.vault.on('delete', (file) => {
+			if (file instanceof TFile && file.extension === 'md') {
+				console.log(`[ObsidiAnswer] File deleted: ${file.path}`);
+				this.scheduleFileRemoval(file.path);
+			}
+		});
+
+		// Listen for file rename/move
+		this.app.vault.on('rename', (file, oldPath) => {
+			if (file instanceof TFile && file.extension === 'md') {
+				console.log(`[ObsidiAnswer] File renamed: ${oldPath} -> ${file.path}`);
+				// Remove old path and index new path
+				this.scheduleFileRemoval(oldPath);
+				this.scheduleFileIndex(file.path);
+			}
+		});
+	}
+
+	private scheduleFileIndex(filePath: string) {
+		// Add to pending files
+		this.pendingFiles.add(filePath);
+
+		// Clear existing timer
+		if (this.debounceTimer) {
+			clearTimeout(this.debounceTimer);
+		}
+
+		// Set new timer with configurable debounce delay
+		this.debounceTimer = setTimeout(() => {
+			this.processPendingFiles();
+		}, this.settings.debounceDelay);
+	}
+
+	private scheduleFileRemoval(filePath: string) {
+		// Remove from index immediately (no debounce needed for deletions)
+		this.indexManager.removeFileFromIndex(filePath).catch(error => {
+			console.error(`[ObsidiAnswer] Error removing file from index: ${filePath}`, error);
+		});
+	}
+
+	private async processPendingFiles() {
+		if (this.isIndexing || this.pendingFiles.size === 0) {
+			return;
+		}
+
+		this.isIndexing = true;
+		const filesToProcess = Array.from(this.pendingFiles);
+		this.pendingFiles.clear();
+
+		console.log(`[ObsidiAnswer] Checking ${filesToProcess.length} pending files for changes...`);
+
+		try {
+			const actuallyUpdatedFiles: string[] = [];
+
+			for (const filePath of filesToProcess) {
+				const file = this.app.vault.getAbstractFileByPath(filePath);
+				if (file instanceof TFile && file.extension === 'md') {
+					try {
+						// Check if file actually needs updating
+						const needsUpdate = !(await this.indexManager.isFileUpToDate(file));
+
+						if (needsUpdate) {
+							await this.indexFile(file);
+							actuallyUpdatedFiles.push(file.path);
+							console.log(`[ObsidiAnswer] Auto-indexed: ${file.path}`);
+						} else {
+							console.log(`[ObsidiAnswer] File already up-to-date, skipping: ${file.path}`);
+						}
+					} catch (error) {
+						console.error(`[ObsidiAnswer] Error auto-indexing file: ${file.path}`, error);
+					}
+				}
+			}
+
+			if (actuallyUpdatedFiles.length > 0) {
+				new Notice(`ObsidiAnswer: Updated ${actuallyUpdatedFiles.length} file(s)`);
+				console.log(`[ObsidiAnswer] Actually updated files:`, actuallyUpdatedFiles);
+			} else {
+				console.log(`[ObsidiAnswer] No files needed updating (all were already current)`);
+			}
+		} finally {
+			this.isIndexing = false;
+		}
+	}
+
 	cleanup() {
 		// Clean up resources if needed
+		if (this.debounceTimer) {
+			clearTimeout(this.debounceTimer);
+		}
 		this.isInitialized = false;
 	}
 

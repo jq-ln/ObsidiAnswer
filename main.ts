@@ -222,6 +222,28 @@ class RAGSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
+			.setName('Auto-index on file changes')
+			.setDesc('Automatically update the index when files are created, modified, or deleted')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoIndexOnChange)
+				.onChange(async (value) => {
+					this.plugin.settings.autoIndexOnChange = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Debounce delay (ms)')
+			.setDesc('Wait time before processing file changes to avoid excessive indexing')
+			.addSlider(slider => slider
+				.setLimits(500, 10000, 500)
+				.setValue(this.plugin.settings.debounceDelay)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.debounceDelay = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('Include file paths in context')
 			.setDesc('Include file paths and folder structure in the context sent to the AI')
 			.addToggle(toggle => toggle
