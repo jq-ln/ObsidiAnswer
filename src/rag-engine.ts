@@ -1,6 +1,8 @@
 import { App, TFile, Notice, normalizePath } from 'obsidian';
 import { RAGSettings } from './settings';
 import { IndexManager, DocumentChunk } from './index-manager';
+import { BaseLLMProvider, ProviderConfig } from './providers/base-provider';
+import { ProviderFactory } from './providers/provider-factory';
 
 // Minimal debug logger to silence verbose logs by default
 const DEBUG_LOGS = false;
@@ -23,6 +25,7 @@ export class RAGEngine {
 	private app: App;
 	private settings: RAGSettings;
 	private indexManager: IndexManager;
+	private llmProvider: BaseLLMProvider;
 	public isInitialized = false;
 	private progressCallback?: (progress: IndexingProgress) => void;
 
@@ -30,11 +33,20 @@ export class RAGEngine {
 		this.app = app;
 		this.settings = settings;
 		this.indexManager = new IndexManager(app, settings);
+		this.llmProvider = this.createProvider(settings);
 	}
 
-	// Get current settings (in case they've been updated)
-	private getCurrentSettings(): RAGSettings {
-		return this.settings;
+	private createProvider(settings: RAGSettings): BaseLLMProvider {
+		const config: ProviderConfig = {
+			apiKey: settings.provider === 'openai' ? settings.openaiApiKey : settings.llamaApiKey,
+			baseUrl: settings.provider === 'llama' ? settings.llamaBaseUrl : undefined,
+			embeddingModel: settings.embeddingModel,
+			chatModel: settings.chatModel,
+			maxTokens: settings.maxTokens,
+			temperature: settings.temperature
+		};
+
+		return ProviderFactory.createProvider(settings.provider, config);
 	}
 
 	async initialize() {
@@ -64,14 +76,31 @@ export class RAGEngine {
 	}
 
 	updateSettings(settings: RAGSettings) {
-		console.log('[ObsidiAnswer] Updating settings reference');
+		console.log('[ObsidiAnswer] Updating settings and provider');
+		const oldProvider = this.settings.provider;
 		this.settings = settings;
-		// Don't do anything else - settings will be used on next operation
+
+		// Recreate provider if provider type changed or if key settings changed
+		if (oldProvider !== settings.provider) {
+			console.log(`[ObsidiAnswer] Provider changed from ${oldProvider} to ${settings.provider}`);
+			this.llmProvider = this.createProvider(settings);
+		} else {
+			// Update existing provider config
+			this.llmProvider.updateConfig({
+				apiKey: settings.provider === 'openai' ? settings.openaiApiKey : settings.llamaApiKey,
+				baseUrl: settings.provider === 'llama' ? settings.llamaBaseUrl : undefined,
+				embeddingModel: settings.embeddingModel,
+				chatModel: settings.chatModel,
+				maxTokens: settings.maxTokens,
+				temperature: settings.temperature
+			});
+		}
 	}
 
 	async indexVault(): Promise<void> {
-		if (!this.settings.openaiApiKey) {
-			new Notice('Please set your OpenAI API key in settings first');
+		if (!this.llmProvider.isConfigured()) {
+			const providerName = this.llmProvider.getName();
+			new Notice(`Please configure ${providerName} in settings first`);
 			return;
 		}
 
@@ -277,35 +306,8 @@ export class RAGEngine {
 	}
 
 	private async generateEmbedding(text: string): Promise<number[]> {
-		debug(`[ObsidiAnswer] Generating embedding for text of length ${text.length}`);
-
-		if (!this.settings.openaiApiKey) {
-			throw new Error('OpenAI API key not configured');
-		}
-
-		const response = await fetch('https://api.openai.com/v1/embeddings', {
-			method: 'POST',
-			headers: {
-				'Authorization': `Bearer ${this.settings.openaiApiKey}`,
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify({
-				input: text,
-				model: this.settings.embeddingModel,
-			}),
-		});
-
-		console.log(`[ObsidiAnswer] OpenAI API response status: ${response.status}`);
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error(`[ObsidiAnswer] OpenAI API error: ${response.status} ${response.statusText}`, errorText);
-			throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
-		}
-
-		const data = await response.json();
-		console.log(`[ObsidiAnswer] Generated embedding with ${data.data[0].embedding.length} dimensions`);
-		return data.data[0].embedding;
+		const response = await this.llmProvider.generateEmbedding(text);
+		return response.embedding;
 	}
 
 	private cosineSimilarity(a: number[], b: number[]): number {
@@ -403,29 +405,13 @@ If the provided context doesn't contain enough information to fully answer the q
 Context information ${contextInfo}:
 ${context}`;
 
-		const response = await fetch('https://api.openai.com/v1/chat/completions', {
-			method: 'POST',
-			headers: {
-				'Authorization': `Bearer ${this.settings.openaiApiKey}`,
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify({
-				model: this.settings.chatModel,
-				messages: [
-					{ role: 'system', content: systemPrompt },
-					{ role: 'user', content: question }
-				],
-				temperature: 0.7,
-				max_tokens: 1000,
-			}),
-		});
+		const messages = [
+			{ role: 'system', content: systemPrompt },
+			{ role: 'user', content: question }
+		];
 
-		if (!response.ok) {
-			throw new Error(`OpenAI API error: ${response.statusText}`);
-		}
-
-		const data = await response.json();
-		return data.choices[0].message.content;
+		const response = await this.llmProvider.generateChatResponse(messages);
+		return response.content;
 	}
 
 	cleanup() {

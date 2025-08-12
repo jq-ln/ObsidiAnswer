@@ -2,6 +2,7 @@ import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Set
 import { RAGEngine } from './src/rag-engine';
 import { RAGView, VIEW_TYPE_RAG } from './src/rag-view';
 import { RAGSettings, DEFAULT_SETTINGS } from './src/settings';
+import { ProviderFactory, ProviderType } from './src/providers/provider-factory';
 
 export default class RAGPlugin extends Plugin {
 	settings: RAGSettings;
@@ -159,47 +160,32 @@ class RAGSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const {containerEl} = this;
-
 		containerEl.empty();
 
+		// Provider Selection
 		new Setting(containerEl)
-			.setName('OpenAI API Key')
-			.setDesc('Your OpenAI API key for embeddings and chat completions')
-			.addText(text => text
-				.setPlaceholder('sk-...')
-				.setValue(this.plugin.settings.openaiApiKey)
-				.onChange(async (value) => {
-					this.plugin.settings.openaiApiKey = value;
-					await this.plugin.saveSettings();
-				}));
+			.setName('LLM Provider')
+			.setDesc('Choose your AI provider')
+			.addDropdown(dropdown => {
+				const providers = ProviderFactory.getAvailableProviders();
+				providers.forEach(provider => {
+					dropdown.addOption(provider.id, provider.name);
+				});
+				dropdown.setValue(this.plugin.settings.provider)
+					.onChange(async (value: ProviderType) => {
+						this.plugin.settings.provider = value;
+						await this.plugin.saveSettings();
+						this.display(); // Refresh to show provider-specific settings
+					});
+			});
 
-		new Setting(containerEl)
-			.setName('Embedding Model')
-			.setDesc('OpenAI model to use for generating embeddings')
-			.addDropdown(dropdown => dropdown
-				.addOption('text-embedding-3-small', 'text-embedding-3-small (Recommended)')
-				.addOption('text-embedding-3-large', 'text-embedding-3-large')
-				.addOption('text-embedding-ada-002', 'text-embedding-ada-002 (Legacy)')
-				.setValue(this.plugin.settings.embeddingModel)
-				.onChange(async (value) => {
-					this.plugin.settings.embeddingModel = value;
-					await this.plugin.saveSettings();
-				}));
+		// Provider-specific settings
+		this.displayProviderSettings(containerEl);
 
-		new Setting(containerEl)
-			.setName('Chat Model')
-			.setDesc('OpenAI model to use for generating responses')
-			.addDropdown(dropdown => dropdown
-				.addOption('gpt-4o', 'GPT-4o (Recommended)')
-				.addOption('gpt-4o-mini', 'GPT-4o Mini')
-				.addOption('gpt-4-turbo', 'GPT-4 Turbo')
-				.addOption('gpt-3.5-turbo', 'GPT-3.5 Turbo')
-				.setValue(this.plugin.settings.chatModel)
-				.onChange(async (value) => {
-					this.plugin.settings.chatModel = value;
-					await this.plugin.saveSettings();
-				}));
+		// Model settings
+		this.displayModelSettings(containerEl);
 
+		// Search settings
 		new Setting(containerEl)
 			.setName('Max Results')
 			.setDesc('Maximum number of relevant documents to retrieve')
@@ -224,6 +210,7 @@ class RAGSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// General settings
 		new Setting(containerEl)
 			.setName('Auto-index on startup')
 			.setDesc('Automatically index the vault when Obsidian starts')
@@ -241,6 +228,109 @@ class RAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.includeFilePaths)
 				.onChange(async (value) => {
 					this.plugin.settings.includeFilePaths = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+
+	private displayProviderSettings(containerEl: HTMLElement): void {
+		const provider = this.plugin.settings.provider;
+
+		if (provider === 'openai') {
+			new Setting(containerEl)
+				.setName('OpenAI API Key')
+				.setDesc('Your OpenAI API key for embeddings and chat completions')
+				.addText(text => text
+					.setPlaceholder('sk-...')
+					.setValue(this.plugin.settings.openaiApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.openaiApiKey = value;
+						await this.plugin.saveSettings();
+					}));
+		} else if (provider === 'llama') {
+			new Setting(containerEl)
+				.setName('Llama Base URL')
+				.setDesc('Base URL for your self-hosted Llama instance (e.g., http://localhost:8080)')
+				.addText(text => text
+					.setPlaceholder('http://localhost:8080')
+					.setValue(this.plugin.settings.llamaBaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.llamaBaseUrl = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Llama API Key (Optional)')
+				.setDesc('API key if your Llama instance requires authentication')
+				.addText(text => text
+					.setPlaceholder('Optional API key')
+					.setValue(this.plugin.settings.llamaApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.llamaApiKey = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+	}
+
+	private displayModelSettings(containerEl: HTMLElement): void {
+		const provider = this.plugin.settings.provider;
+
+		// Get available models from the provider
+		const tempProvider = ProviderFactory.createProvider(provider, {
+			embeddingModel: '',
+			chatModel: ''
+		});
+
+		new Setting(containerEl)
+			.setName('Embedding Model')
+			.setDesc(`${tempProvider.getName()} model to use for generating embeddings`)
+			.addDropdown(dropdown => {
+				const models = tempProvider.getAvailableEmbeddingModels();
+				models.forEach(model => {
+					dropdown.addOption(model, model);
+				});
+				dropdown.setValue(this.plugin.settings.embeddingModel)
+					.onChange(async (value) => {
+						this.plugin.settings.embeddingModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Chat Model')
+			.setDesc(`${tempProvider.getName()} model to use for generating responses`)
+			.addDropdown(dropdown => {
+				const models = tempProvider.getAvailableChatModels();
+				models.forEach(model => {
+					dropdown.addOption(model, model);
+				});
+				dropdown.setValue(this.plugin.settings.chatModel)
+					.onChange(async (value) => {
+						this.plugin.settings.chatModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Max Tokens')
+			.setDesc('Maximum tokens for chat responses')
+			.addSlider(slider => slider
+				.setLimits(100, 4000, 100)
+				.setValue(this.plugin.settings.maxTokens)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.maxTokens = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Temperature')
+			.setDesc('Creativity/randomness of responses (0 = deterministic, 1 = creative)')
+			.addSlider(slider => slider
+				.setLimits(0, 1, 0.1)
+				.setValue(this.plugin.settings.temperature)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.temperature = value;
 					await this.plugin.saveSettings();
 				}));
 	}
