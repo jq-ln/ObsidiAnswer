@@ -1,4 +1,4 @@
-# RAG Plugin Setup
+# ObsidiAnswer Plugin Setup
 
 ## Quick Start
 
@@ -19,12 +19,12 @@ npm run build:sync
 - `styles.css` - UI styling
 
 ## Plugin location:
-`vault/.obsidian/plugins/obsidian-rag-plugin/`
+`vault/.obsidian/plugins/obsidianswer/`
 
 ## After running build:sync:
 1. Open Obsidian
 2. Go to Settings → Community Plugins
-3. Find "RAG Knowledge Assistant" and enable it
+3. Find "ObsidiAnswer" and enable it
 4. Configure your OpenAI API key in the plugin settings
 5. The plugin will auto-index your vault on startup
 

@@ -1,6 +1,11 @@
 import { App, TFile, Vault } from 'obsidian';
 import { RAGSettings } from './settings';
 
+// Minimal debug logger to silence verbose logs by default
+const DEBUG_LOGS = false;
+const debug = (...args: unknown[]) => { if (DEBUG_LOGS) console.log(...args); };
+
+
 export interface FileVersion {
 	path: string;
 	mtime: number; // Last modified time
@@ -83,67 +88,89 @@ export class IndexManager {
 
 	async loadIndex(): Promise<void> {
 		try {
-			const indexFile = this.app.vault.adapter.path.join(
-				this.app.vault.adapter.basePath,
-				this.indexPath
-			);
-			
-			if (await this.app.vault.adapter.exists(indexFile)) {
-				const content = await this.app.vault.adapter.read(indexFile);
+			console.log(`[IndexManager] Loading index from ${this.indexPath}`);
+
+			if (await this.app.vault.adapter.exists(this.indexPath)) {
+				const content = await this.app.vault.adapter.read(this.indexPath);
 				this.index = JSON.parse(content);
-				
+
+				debug(`[IndexManager] Loaded index with ${this.index.stats.totalFiles} files, ${this.index.stats.totalChunks} chunks, ${this.index.stats.totalEmbeddings} embeddings`);
+				debug(`[IndexManager] Index embedding model: ${this.index.settings.embeddingModel}, Current setting: ${this.settings.embeddingModel}`);
+
 				// Validate index version and settings
 				await this.validateIndex();
+
+				debug(`[IndexManager] After validation: ${this.index.stats.totalFiles} files, ${this.index.stats.totalChunks} chunks, ${this.index.stats.totalEmbeddings} embeddings`);
 			} else {
+				console.log(`[IndexManager] No existing index found, creating new one`);
 				// Create new index
 				this.index = this.createEmptyIndex();
 				await this.saveIndex();
 			}
 		} catch (error) {
-			console.error('Error loading index:', error);
+			console.error('[IndexManager] Error loading index:', error);
 			this.index = this.createEmptyIndex();
 		}
 	}
 
 	private async validateIndex(): Promise<void> {
-		let needsRebuild = false;
+		// Never wipe an existing index during startup validation. Preserve data and align metadata.
+		const hasEmbeddings = this.index.stats.totalEmbeddings > 0;
 
-		// Check if embedding model changed
-		if (this.index.settings.embeddingModel !== this.settings.embeddingModel) {
-			console.log('Embedding model changed, rebuilding index...');
-			needsRebuild = true;
-		}
-
-		// Check index version compatibility
+		// If version differs, just update the version field and keep data
 		if (this.index.version !== '1.0.0') {
-			console.log('Index version incompatible, rebuilding...');
-			needsRebuild = true;
+			console.warn('[IndexManager] Index version mismatch. Preserving existing data and updating version metadata only.');
+			this.index.version = '1.0.0';
 		}
 
-		if (needsRebuild) {
-			await this.rebuildIndex();
+		// If embedding model changed, keep existing embeddings and update settings.
+		// Search will ignore embeddings from a different model.
+		if (this.index.settings.embeddingModel !== this.settings.embeddingModel) {
+			if (hasEmbeddings) {
+				console.warn(`[IndexManager] Embedding model changed from ${this.index.settings.embeddingModel} to ${this.settings.embeddingModel}. Preserving existing embeddings; they will be ignored for search until re-indexed.`);
+			}
+			this.index.settings.embeddingModel = this.settings.embeddingModel;
 		}
+
+		// Ensure other settings are aligned
+		this.index.settings = {
+			embeddingModel: this.settings.embeddingModel,
+			chunkSize: 1000,
+			chunkOverlap: 200
+		};
 	}
 
 	async saveIndex(): Promise<void> {
 		try {
+			debug(`[IndexManager] Saving index to ${this.indexPath}`);
+			debug(`[IndexManager] Index stats before save:`, this.index.stats);
+
 			this.index.updatedAt = Date.now();
-			
-			// Ensure directory exists
-			const indexDir = this.app.vault.adapter.path.dirname(this.indexPath);
-			await this.app.vault.adapter.mkdir(indexDir);
-			
+
+			// Ensure directory exists - extract directory from path
+			const pathParts = this.indexPath.split('/');
+			if (pathParts.length > 1) {
+				const indexDir = pathParts.slice(0, -1).join('/');
+				if (!(await this.app.vault.adapter.exists(indexDir))) {
+					debug(`[IndexManager] Creating directory: ${indexDir}`);
+					await this.app.vault.adapter.mkdir(indexDir);
+				}
+			}
+
 			const content = JSON.stringify(this.index, null, 2);
+			debug(`[IndexManager] Writing ${content.length} characters to index file`);
 			await this.app.vault.adapter.write(this.indexPath, content);
+			debug(`[IndexManager] Successfully saved index`);
 		} catch (error) {
-			console.error('Error saving index:', error);
+			console.error('[IndexManager] Error saving index:', error);
+			throw error; // Re-throw to see if this is causing issues
 		}
 	}
 
 	async getFileVersion(file: TFile): Promise<FileVersion> {
 		const stat = await this.app.vault.adapter.stat(file.path);
 		const content = await this.app.vault.read(file);
-		
+
 		return {
 			path: file.path,
 			mtime: stat?.mtime || 0,
@@ -180,8 +207,18 @@ export class IndexManager {
 		const allFiles = this.app.vault.getMarkdownFiles();
 		const outdatedFiles: TFile[] = [];
 
+		// If the workspace/files are not yet ready, avoid treating missing entries as deletions
+		if (!allFiles || allFiles.length === 0) {
+			debug('[IndexManager] Vault files not ready; skipping outdated check');
+			return [];
+		}
+
+		debug(`[IndexManager] Checking ${allFiles.length} files for updates`);
+		debug(`[IndexManager] Currently have ${Object.keys(this.index.files).length} files in index`);
+
 		for (const file of allFiles) {
 			if (!(await this.isFileUpToDate(file))) {
+				debug(`[IndexManager] File needs update: ${file.path}`);
 				outdatedFiles.push(file);
 			}
 		}
@@ -190,11 +227,13 @@ export class IndexManager {
 		const currentPaths = new Set(allFiles.map(f => f.path));
 		for (const indexedPath of Object.keys(this.index.files)) {
 			if (!currentPaths.has(indexedPath)) {
+				debug(`[IndexManager] File was deleted, removing from index: ${indexedPath}`);
 				// File was deleted, remove from index
 				await this.removeFileFromIndex(indexedPath);
 			}
 		}
 
+		debug(`[IndexManager] Found ${outdatedFiles.length} outdated files`);
 		return outdatedFiles;
 	}
 
@@ -217,31 +256,40 @@ export class IndexManager {
 	}
 
 	async addFileToIndex(file: TFile, chunks: DocumentChunk[]): Promise<void> {
+		debug(`[IndexManager] Adding file to index: ${file.path} with ${chunks.length} chunks`);
+
 		const fileVersion = await this.getFileVersion(file);
+		debug(`[IndexManager] File version:`, fileVersion);
 
 		// Remove old chunks for this file
 		await this.removeFileFromIndex(file.path);
 
 		// Add new file version
 		this.index.files[file.path] = fileVersion;
+		debug(`[IndexManager] Added file version for ${file.path}`);
 
 		// Add new chunks
 		for (const chunk of chunks) {
 			chunk.fileVersion = fileVersion;
 			chunk.updatedAt = Date.now();
 			this.index.chunks[chunk.id] = chunk;
+			debug(`[IndexManager] Added chunk ${chunk.id}`);
 		}
 
 		// Update stats
 		this.updateStats();
+		debug(`[IndexManager] Updated stats:`, this.index.stats);
+
 		await this.saveIndex();
+		console.log(`[IndexManager] Saved index for ${file.path}`);
 	}
 
 	private updateStats(): void {
 		this.index.stats.totalFiles = Object.keys(this.index.files).length;
 		this.index.stats.totalChunks = Object.keys(this.index.chunks).length;
+		// Count embeddings that match the current embedding model
 		this.index.stats.totalEmbeddings = Object.values(this.index.chunks)
-			.filter(chunk => chunk.embedding).length;
+			.filter(chunk => !!chunk.embedding && chunk.embeddingModel === this.settings.embeddingModel).length;
 	}
 
 	async rebuildIndex(): Promise<void> {
@@ -255,14 +303,16 @@ export class IndexManager {
 	}
 
 	getChunksWithEmbeddings(): DocumentChunk[] {
-		return Object.values(this.index.chunks).filter(chunk => chunk.embedding);
+		// Only return chunks whose embeddings match the current embedding model
+		return Object.values(this.index.chunks)
+			.filter(chunk => !!chunk.embedding && chunk.embeddingModel === this.settings.embeddingModel);
 	}
 
 	getIndexStats() {
 		return {
 			...this.index.stats,
 			indexSize: JSON.stringify(this.index).length,
-			avgChunkSize: this.index.stats.totalChunks > 0 
+			avgChunkSize: this.index.stats.totalChunks > 0
 				? Object.values(this.index.chunks)
 					.reduce((sum, chunk) => sum + chunk.content.length, 0) / this.index.stats.totalChunks
 				: 0
@@ -274,9 +324,16 @@ export class IndexManager {
 			this.index.chunks[chunkId].embedding = embedding;
 			this.index.chunks[chunkId].embeddingModel = this.settings.embeddingModel;
 			this.index.chunks[chunkId].updatedAt = Date.now();
-			
+
 			this.updateStats();
 			await this.saveIndex();
 		}
+	}
+
+	updateSettings(settings: RAGSettings): void {
+		console.log('[IndexManager] Updating settings without recreating index');
+		this.settings = settings;
+		// Update the index path in case it changed
+		this.indexPath = `${settings.indexPath}/vault-index.json`;
 	}
 }

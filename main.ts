@@ -20,14 +20,14 @@ export default class RAGPlugin extends Plugin {
 		);
 
 		// Add ribbon icon
-		this.addRibbonIcon('brain-circuit', 'RAG Knowledge Assistant', (evt: MouseEvent) => {
+		this.addRibbonIcon('brain-circuit', 'ObsidiAnswer', (evt: MouseEvent) => {
 			this.activateView();
 		});
 
 		// Add command to open RAG view
 		this.addCommand({
 			id: 'open-rag-view',
-			name: 'Open RAG Knowledge Assistant',
+			name: 'ObsidiAnswer: Open Assistant',
 			callback: () => {
 				this.activateView();
 			}
@@ -36,7 +36,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to ask question about current note
 		this.addCommand({
 			id: 'ask-about-current-note',
-			name: 'Ask question about current note',
+			name: 'ObsidiAnswer: Ask About Current Note',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				this.askAboutCurrentNote(view.file);
 			}
@@ -45,7 +45,7 @@ export default class RAGPlugin extends Plugin {
 		// Add command to index vault
 		this.addCommand({
 			id: 'index-vault',
-			name: 'Index vault for RAG',
+			name: 'ObsidiAnswer: Index Vault',
 			callback: async () => {
 				new Notice('Starting vault indexing...');
 				await this.ragEngine.indexVault();
@@ -53,11 +53,47 @@ export default class RAGPlugin extends Plugin {
 			}
 		});
 
+		// Add command to force rebuild index
+		this.addCommand({
+			id: 'force-rebuild-index',
+			name: 'ObsidiAnswer: Force Vault Re-Index',
+			callback: async () => {
+				new Notice('Starting complete vault re-indexing...');
+				await this.ragEngine.forceRebuildIndex();
+				new Notice('Vault re-indexing completed!');
+			}
+		});
+
+		// Add command to show index stats
+		this.addCommand({
+			id: 'show-index-stats',
+			name: 'ObsidiAnswer: Show Index Statistics',
+			callback: () => {
+				const stats = this.ragEngine.getIndexStats();
+				new Notice(`Index Stats: ${stats.totalFiles} files, ${stats.totalChunks} chunks, ${stats.totalEmbeddings} embeddings`);
+				console.log('ObsidiAnswer Index Statistics:', stats);
+			}
+		});
+
+		// Add command to reset similarity threshold
+		this.addCommand({
+			id: 'reset-similarity-threshold',
+			name: 'ObsidiAnswer: Reset Similarity Threshold to 0.3',
+			callback: async () => {
+				this.settings.similarityThreshold = 0.3;
+				await this.saveSettings();
+				new Notice('Similarity threshold reset to 0.3');
+			}
+		});
+
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new RAGSettingTab(this.app, this));
 
-		// Initialize the RAG engine when plugin loads
-		await this.ragEngine.initialize();
+		// Initialize the RAG engine when plugin loads (non-blocking)
+		this.ragEngine.initialize().catch(error => {
+			console.error('Error initializing RAG engine:', error);
+			new Notice('Error initializing ObsidiAnswer. Check console for details.');
+		});
 	}
 
 	onunload() {
@@ -70,8 +106,9 @@ export default class RAGPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-		// Reinitialize RAG engine with new settings
-		await this.ragEngine.updateSettings(this.settings);
+		// Update RAG engine settings reference (no complex logic)
+		this.ragEngine.updateSettings(this.settings);
+		console.log('[ObsidiAnswer] Settings saved and updated');
 	}
 
 	async activateView() {

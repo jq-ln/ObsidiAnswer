@@ -3,7 +3,7 @@ const path = require('path');
 
 // Paths
 const sourceDir = __dirname + '/..'; // RAG directory
-const targetDir = path.join(__dirname, '../../vault/.obsidian/plugins/obsidian-rag-plugin');
+const targetDir = path.join(__dirname, '../../vault/.obsidian/plugins/obsidianswer');
 
 // Files to copy
 const filesToCopy = [

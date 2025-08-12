@@ -1,4 +1,4 @@
-# RAG Knowledge Assistant for Obsidian
+# ObsidiAnswer
 
 An intelligent knowledge retrieval and question-answering plugin for Obsidian that uses RAG (Retrieval-Augmented Generation) to help you find and understand information across your entire vault.
 
@@ -25,7 +25,7 @@ The plugin uses advanced AI techniques to understand and retrieve information fr
 
 1. Open Obsidian Settings
 2. Go to Community Plugins and disable Safe Mode
-3. Click Browse and search for "RAG Knowledge Assistant"
+3. Click Browse and search for "ObsidiAnswer"
 4. Install and enable the plugin
 
 ### Manual Installation
@@ -42,7 +42,7 @@ The plugin uses advanced AI techniques to understand and retrieve information fr
    - Note: This plugin requires an OpenAI API key and will incur usage costs
 
 2. **Configure the Plugin**:
-   - Open Obsidian Settings → Community Plugins → RAG Knowledge Assistant
+   - Open Obsidian Settings → Community Plugins → ObsidiAnswer
    - Enter your OpenAI API key
    - Adjust other settings as needed (defaults work well for most users)
 
@@ -56,7 +56,7 @@ The plugin uses advanced AI techniques to understand and retrieve information fr
 ### Opening the Assistant
 
 - Click the brain icon in the ribbon
-- Use the command palette: "Open RAG Knowledge Assistant"
+- Use the command palette: "ObsidiAnswer: Open Assistant"
 - Use the hotkey (if configured)
 
 ### Asking Questions
@@ -70,7 +70,7 @@ Simply type natural language questions about your vault content:
 
 ### Context-Specific Queries
 
-- Use "Ask question about current note" command while viewing a note
+- Use "ObsidiAnswer: Ask About Current Note" command while viewing a note
 - The assistant will focus on that specific note for more targeted answers
 
 ## Settings

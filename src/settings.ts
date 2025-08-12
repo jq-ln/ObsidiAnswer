@@ -14,8 +14,8 @@ export const DEFAULT_SETTINGS: RAGSettings = {
 	embeddingModel: 'text-embedding-3-small',
 	chatModel: 'gpt-4o',
 	maxResults: 5,
-	similarityThreshold: 0.7,
+	similarityThreshold: 0.3,
 	autoIndex: true,
 	includeFilePaths: true,
-	indexPath: '.obsidian/plugins/obsidian-rag-plugin/index'
+	indexPath: '.obsidian/plugins/obsidianswer/index'
 };

@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-rag-plugin",
+  "name": "obsidianswer",
   "version": "1.0.0",
-  "description": "Intelligent knowledge retrieval and question answering using RAG for Obsidian",
+  "description": "ObsidiAnswer - Intelligent knowledge retrieval and question answering using RAG for Obsidian",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -19,7 +19,7 @@
     "retrieval",
     "question-answering"
   ],
-  "author": "Your Name",
+  "author": "Jacqueline Amherst",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^18.0.0",

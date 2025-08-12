@@ -1,11 +1,11 @@
 {
-	"id": "obsidian-rag-plugin",
-	"name": "RAG Knowledge Assistant",
+	"id": "obsidianswer",
+	"name": "ObsidiAnswer",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
 	"description": "Intelligent knowledge retrieval and question answering using RAG (Retrieval-Augmented Generation) for your Obsidian vault.",
-	"author": "Your Name",
-	"authorUrl": "https://github.com/yourusername",
-	"fundingUrl": "https://buymeacoffee.com/yourusername",
+	"author": "Jacqueline Amherst",
+	"authorUrl": "https://github.com/jq-ln",
+	"fundingUrl": "https://buymeacoffee.com/jqln",
 	"isDesktopOnly": false
 }
