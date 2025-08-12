@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from 'obsidian';
+import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from 'obsidian';
 import { RAGEngine } from './src/rag-engine';
 import { RAGView, VIEW_TYPE_RAG } from './src/rag-view';
 import { RAGSettings, DEFAULT_SETTINGS } from './src/settings';
@@ -21,7 +21,7 @@ export default class RAGPlugin extends Plugin {
 		);
 
 		// Add ribbon icon
-		this.addRibbonIcon('brain-circuit', 'ObsidiAnswer', (evt: MouseEvent) => {
+		this.addRibbonIcon('brain-circuit', 'ObsidiAnswer', () => {
 			this.activateView();
 		});
 
@@ -38,7 +38,7 @@ export default class RAGPlugin extends Plugin {
 		this.addCommand({
 			id: 'ask-about-current-note',
 			name: 'Ask About Current Note',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
+			editorCallback: (_editor: Editor, view: MarkdownView) => {
 				this.askAboutCurrentNote(view.file);
 			}
 		});
@@ -107,6 +107,22 @@ export default class RAGPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+
+		// Validate settings before updating
+		const errors = ProviderFactory.validateConfig(this.settings.provider, {
+			apiKey: this.settings.provider === 'openai' ? this.settings.openaiApiKey : this.settings.llamaApiKey,
+			baseUrl: this.settings.provider === 'llama' ? this.settings.llamaBaseUrl : undefined,
+			embeddingModel: this.settings.embeddingModel,
+			chatModel: this.settings.chatModel,
+			maxTokens: this.settings.maxTokens,
+			temperature: this.settings.temperature
+		});
+
+		if (errors.length > 0) {
+			console.warn('[ObsidiAnswer] Configuration issues:', errors);
+			new Notice(`Configuration issues: ${errors.join(', ')}`);
+		}
+
 		// Update RAG engine settings reference (no complex logic)
 		this.ragEngine.updateSettings(this.settings);
 		console.log('[ObsidiAnswer] Settings saved and updated');
@@ -174,6 +190,33 @@ class RAGSettingTab extends PluginSettingTab {
 				dropdown.setValue(this.plugin.settings.provider)
 					.onChange(async (value: ProviderType) => {
 						this.plugin.settings.provider = value;
+
+						// Update default models when switching providers
+						if (value === 'llama') {
+							// Set appropriate Llama models if current models are OpenAI-specific
+							if (this.plugin.settings.embeddingModel === 'text-embedding-3-small' ||
+								this.plugin.settings.embeddingModel === 'text-embedding-3-large' ||
+								this.plugin.settings.embeddingModel === 'text-embedding-ada-002') {
+								this.plugin.settings.embeddingModel = 'nomic-embed-text';
+							}
+							if (this.plugin.settings.chatModel === 'gpt-4o' ||
+								this.plugin.settings.chatModel === 'gpt-4o-mini' ||
+								this.plugin.settings.chatModel === 'gpt-4-turbo' ||
+								this.plugin.settings.chatModel === 'gpt-4' ||
+								this.plugin.settings.chatModel === 'gpt-3.5-turbo') {
+								this.plugin.settings.chatModel = 'llama3:latest';
+							}
+						} else if (value === 'openai') {
+							// Set appropriate OpenAI models if current models are Llama-specific
+							if (this.plugin.settings.embeddingModel.includes('sentence-transformers') ||
+								this.plugin.settings.embeddingModel.includes('llama')) {
+								this.plugin.settings.embeddingModel = 'text-embedding-3-small';
+							}
+							if (this.plugin.settings.chatModel.includes('llama')) {
+								this.plugin.settings.chatModel = 'gpt-4o';
+							}
+						}
+
 						await this.plugin.saveSettings();
 						this.display(); // Refresh to show provider-specific settings
 					});
@@ -276,8 +319,36 @@ class RAGSettingTab extends PluginSettingTab {
 					.setPlaceholder('http://localhost:8080')
 					.setValue(this.plugin.settings.llamaBaseUrl)
 					.onChange(async (value) => {
-						this.plugin.settings.llamaBaseUrl = value;
+						// Validate and fix common URL issues
+						let cleanUrl = value.trim();
+
+						// Fix common typos
+						if (cleanUrl.startsWith('hhtp://')) {
+							cleanUrl = cleanUrl.replace('hhtp://', 'http://');
+							new Notice('Fixed URL typo: hhtp → http');
+						}
+						if (cleanUrl.startsWith('htttp://')) {
+							cleanUrl = cleanUrl.replace('htttp://', 'http://');
+							new Notice('Fixed URL typo: htttp → http');
+						}
+
+						// Remove trailing slash if present
+						if (cleanUrl.endsWith('/')) {
+							cleanUrl = cleanUrl.slice(0, -1);
+						}
+
+						// Validate URL format
+						if (cleanUrl && !cleanUrl.match(/^https?:\/\/.+/)) {
+							new Notice('Base URL should start with http:// or https://');
+						}
+
+						this.plugin.settings.llamaBaseUrl = cleanUrl;
 						await this.plugin.saveSettings();
+
+						// Update the input field if we made corrections
+						if (cleanUrl !== value) {
+							text.setValue(cleanUrl);
+						}
 					}));
 
 			new Setting(containerEl)

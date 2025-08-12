@@ -49,6 +49,15 @@ export class RAGEngine {
 			temperature: settings.temperature
 		};
 
+		console.log(`[ObsidiAnswer] Creating provider: ${settings.provider}`);
+		console.log(`[ObsidiAnswer] Provider config:`, {
+			provider: settings.provider,
+			hasApiKey: !!config.apiKey,
+			hasBaseUrl: !!config.baseUrl,
+			embeddingModel: config.embeddingModel,
+			chatModel: config.chatModel
+		});
+
 		return ProviderFactory.createProvider(settings.provider, config);
 	}
 
@@ -106,7 +115,17 @@ export class RAGEngine {
 	async indexVault(): Promise<void> {
 		if (!this.llmProvider.isConfigured()) {
 			const providerName = this.llmProvider.getName();
-			new Notice(`Please configure ${providerName} in settings first`);
+			const providerType = this.settings.provider;
+
+			let configMessage = `Please configure ${providerName} in settings first.`;
+			if (providerType === 'llama') {
+				configMessage += ' Make sure to set the Base URL for your self-hosted Llama instance.';
+			} else if (providerType === 'openai') {
+				configMessage += ' Make sure to set your OpenAI API key.';
+			}
+
+			new Notice(configMessage);
+			console.error(`[ObsidiAnswer] Provider not configured: ${providerName} (${providerType})`);
 			return;
 		}
 
@@ -312,6 +331,21 @@ export class RAGEngine {
 	}
 
 	private async generateEmbedding(text: string): Promise<number[]> {
+		if (!this.llmProvider.isConfigured()) {
+			const providerName = this.llmProvider.getName();
+			const providerType = this.settings.provider;
+
+			let errorMessage = `${providerName} is not configured properly.`;
+			if (providerType === 'llama') {
+				errorMessage += ' Please set the Base URL for your self-hosted Llama instance in settings.';
+			} else if (providerType === 'openai') {
+				errorMessage += ' Please set your OpenAI API key in settings.';
+			}
+
+			console.error(`[ObsidiAnswer] ${errorMessage}`);
+			throw new Error(errorMessage);
+		}
+
 		const response = await this.llmProvider.generateEmbedding(text);
 		return response.embedding;
 	}

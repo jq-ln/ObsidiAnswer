@@ -13,10 +13,13 @@ export class LlamaProvider extends BaseLLMProvider {
 		return !!this.config.baseUrl;
 	}
 
+
+
 	getAvailableEmbeddingModels(): string[] {
 		return [
-			'llama3-8b',
-			'llama3-70b',
+			'nomic-embed-text',
+			'mxbai-embed-large',
+			'all-minilm',
 			'sentence-transformers/all-MiniLM-L6-v2',
 			'sentence-transformers/all-mpnet-base-v2'
 		];
@@ -24,63 +27,99 @@ export class LlamaProvider extends BaseLLMProvider {
 
 	getAvailableChatModels(): string[] {
 		return [
-			'llama3-8b-instruct',
-			'llama3-70b-instruct',
-			'llama3.1-8b-instruct',
-			'llama3.1-70b-instruct'
+			'llama3:latest',
+			'llama3:8b',
+			'llama3:70b',
+			'llama3.1:8b',
+			'llama3.1:70b',
+			'mistral:7b',
+			'codellama:7b'
 		];
 	}
 
 	async generateEmbedding(text: string): Promise<EmbeddingResponse> {
 		console.log(`[Llama] Generating embedding for text of length ${text.length}`);
-		
+		console.log(`[Llama] Using base URL: ${this.config.baseUrl}`);
+		console.log(`[Llama] Using model: ${this.config.embeddingModel}`);
+
 		if (!this.config.baseUrl) {
-			throw new Error('Llama base URL not configured');
+			throw new Error('Llama base URL not configured. Please set the Base URL in ObsidiAnswer settings (e.g., http://localhost:8080)');
 		}
 		
 		// This will depend on your self-hosted setup
 		// Common endpoints: /v1/embeddings (OpenAI-compatible) or /embed
-		const response = await fetch(`${this.config.baseUrl}/v1/embeddings`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				// Add auth headers if needed
-				...(this.config.apiKey && { 'Authorization': `Bearer ${this.config.apiKey}` })
-			},
-			body: JSON.stringify({
-				input: text,
-				model: this.config.embeddingModel,
-			}),
-		});
+		const url = `${this.config.baseUrl}/v1/embeddings`;
+		console.log(`[Llama] Making request to: ${url}`);
 
-		console.log(`[Llama] API response status: ${response.status}`);
+		try {
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					// Add auth headers if needed
+					...(this.config.apiKey && { 'Authorization': `Bearer ${this.config.apiKey}` })
+				},
+				body: JSON.stringify({
+					input: text,
+					model: this.config.embeddingModel,
+				}),
+			});
 
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error(`[Llama] API error: ${response.status} ${response.statusText}`, errorText);
-			throw new Error(`Llama API error: ${response.status} ${response.statusText} - ${errorText}`);
+			console.log(`[Llama] API response status: ${response.status}`);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.error(`[Llama] API error: ${response.status} ${response.statusText}`, errorText);
+
+				// Handle specific error cases
+				if (response.status === 404 && errorText.includes('not found')) {
+					let errorMessage = `Model "${this.config.embeddingModel}" not found on your Ollama server.`;
+					errorMessage += `\n\nNote: Your llama3:latest model can be used for chat, but you need a dedicated embedding model.`;
+					errorMessage += `\nTo install an embedding model, run: ollama pull nomic-embed-text`;
+					errorMessage += `\nThen update your settings to use 'nomic-embed-text' for embeddings.`;
+
+					throw new Error(errorMessage);
+				}
+
+				throw new Error(`Llama API error: ${response.status} ${response.statusText} - ${errorText}`);
+			}
+
+			const data = await response.json();
+
+			// Handle different response formats
+			let embedding: number[];
+			if (data.data && data.data[0] && data.data[0].embedding) {
+				// OpenAI-compatible format
+				embedding = data.data[0].embedding;
+			} else if (data.embedding) {
+				// Direct embedding format
+				embedding = data.embedding;
+			} else {
+				throw new Error('Unexpected embedding response format');
+			}
+		
+			console.log(`[Llama] Generated embedding with ${embedding.length} dimensions`);
+
+			return {
+				embedding,
+				dimensions: embedding.length
+			};
+		} catch (error) {
+			console.error(`[Llama] Error generating embedding:`, error);
+
+			// Provide helpful error messages for common issues
+			if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+				if (this.config.baseUrl?.includes('hhtp://')) {
+					throw new Error(`Invalid URL: "${this.config.baseUrl}" - did you mean "http://"? Please check your Base URL in settings.`);
+				} else if (!this.config.baseUrl?.match(/^https?:\/\/.+/)) {
+					throw new Error(`Invalid Base URL format: "${this.config.baseUrl}" - should start with http:// or https://`);
+				} else {
+					throw new Error(`Cannot connect to Llama server at "${this.config.baseUrl}". Please check that your server is running and the URL is correct.`);
+				}
+			}
+
+			throw error;
 		}
-
-		const data = await response.json();
-		
-		// Handle different response formats
-		let embedding: number[];
-		if (data.data && data.data[0] && data.data[0].embedding) {
-			// OpenAI-compatible format
-			embedding = data.data[0].embedding;
-		} else if (data.embedding) {
-			// Direct embedding format
-			embedding = data.embedding;
-		} else {
-			throw new Error('Unexpected embedding response format');
-		}
-		
-		console.log(`[Llama] Generated embedding with ${embedding.length} dimensions`);
-		
-		return {
-			embedding,
-			dimensions: embedding.length
-		};
 	}
 
 	async generateChatResponse(messages: Array<{role: string, content: string}>): Promise<ChatResponse> {
